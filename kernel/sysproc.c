@@ -1,11 +1,15 @@
 #include "types.h"
 #include "riscv.h"
-#include "defs.h"
+
 #include "param.h"
 #include "memlayout.h"
+#include "pstat.h"
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+
+#include "defs.h"
+
 
 uint64
 sys_exit(void)
@@ -106,4 +110,25 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_getpinfo(void)
+{
+  uint64 addr;
+  struct pstat ps;
+  struct proc *p = myproc();
+
+  // Ανάκτηση της διεύθυνσης. Αν ο compiler επιμένει για void, 
+  // χρησιμοποίησε αυτή τη σύνταξη:
+  argaddr(0, &addr); 
+
+  // Συλλογή των στοιχείων από τον πίνακα proc
+  collect_pinfo(&ps);
+
+  // Αντιγραφή των δεδομένων στο user space
+  if(copyout(p->pagetable, addr, (char *)&ps, sizeof(ps)) < 0)
+    return -1;
+
+  return 0;
 }

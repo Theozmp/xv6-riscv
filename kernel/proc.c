@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "pstat.h"
 
 struct cpu cpus[NCPU];
 
@@ -145,6 +146,10 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  p->priority = 0;
+  p->ticks_consumed = 0;
+  p->wait_ticks = 0;
 
   return p;
 }
@@ -426,42 +431,29 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
-    intr_off();
-
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+    // Κανόνας 3: Πάντα ξεκίνα από την ουρά 0
+    for(int i = 0; i < 4; i++) { 
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE && p->priority == i) {
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+          release(&p->lock);
+          
+          // ΜΟΛΙΣ ΕΚΤΕΛΕΣΤΕΙ ΜΙΑ ΔΙΕΡΓΑΣΙΑ, ΠΡΕΠΕΙ ΝΑ ΞΑΝΑΨΑΞΟΥΜΕ ΑΠΟ ΤΗΝ ΟΥΡΑ 0
+          goto start_over; 
+        }
+        release(&p->lock);
       }
-      release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
-    }
+    start_over: ; // Ετικέτα για το reset της αναζήτησης
   }
 }
-
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -687,4 +679,81 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// Αυτή η συνάρτηση θα καλείται από το trap.c (clockintr)
+////
+void
+update_proc_stats(void) {
+  struct proc *p;
+  int quota[] = {4, 8, 16, 32}; 
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNING) {
+      p->ticks_consumed++;
+      // Κανόνας 9: Υποβιβασμός μετά το πέρας του χρονομεριδίου
+      if(p->ticks_consumed >= quota[p->priority]) {
+        if(p->priority < 3) {
+          p->priority++;
+        }
+        p->ticks_consumed = 0; // Μηδενισμός λόγω αλλαγής επιπέδου
+      }
+    } else if(p->state == RUNNABLE) {
+      p->wait_ticks++;
+      // Κανόνας 11: Starvation Boost
+      if(p->wait_ticks >= (quota[p->priority] * 10)) {
+        if(p->priority > 0) {
+          p->priority--;
+          p->ticks_consumed = 0; // Μηδενισμός για το νέο επίπεδο
+        }
+        p->wait_ticks = 0; // Επαναφορά μετρητή αναμονής
+      }
+    }
+    release(&p->lock);
+  }
+}
+
+int
+getpinfo_internal(struct pstat *ps) {
+
+  
+  struct proc *p;
+  int i = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      ps->inuse[i] = 1;
+      ps->pid[i] = p->pid;
+      ps->priority[i] = p->priority;
+      ps->state[i] = (int)p->state; // Cast enum σε int για ασφάλεια
+      safestrcpy(ps->name[i], p->name, sizeof(p->name));
+    } else {
+      ps->inuse[i] = 0;
+    }
+    release(&p->lock);
+    i++;
+  }
+  return 0;
+}
+
+int
+collect_pinfo(struct pstat *ps) {
+  struct proc *p;
+  int i = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      ps->inuse[i] = 1;
+      ps->pid[i] = p->pid;
+      ps->priority[i] = p->priority;
+      ps->state[i] = (int)p->state; // Cast enum σε int
+      safestrcpy(ps->name[i], p->name, sizeof(p->name));
+    } else {
+      ps->inuse[i] = 0;
+    }
+    release(&p->lock);
+    i++;
+  }
+  return 0;
 }

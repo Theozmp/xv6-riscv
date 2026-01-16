@@ -81,8 +81,10 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if(which_dev == 2) {
+    update_proc_stats(); // Ενημέρωσε προτεραιότητες
+    yield();             // Παραχώρησε τη CPU
+  }
 
   prepare_return();
 
@@ -152,8 +154,12 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  // Αν είναι timer interrupt (which_dev == 2)
+  if(which_dev == 2){
+    update_proc_stats(); // 1. Ενημέρωσε τα ticks και τις προτεραιότητες του MLFQ
+    if(myproc() != 0)
+      yield();           // 2. Παράδωσε τη CPU
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.

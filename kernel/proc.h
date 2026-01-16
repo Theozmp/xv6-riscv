@@ -104,4 +104,9 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // Νέα πεδία για τον MLFQ Scheduler:
+  int priority;                // Επίπεδο προτεραιότητας (0 έως 3)
+  int ticks_consumed;          // Ticks που καταναλώθηκαν στο τρέχον επίπεδο (για το time quantum)
+  int wait_ticks;              // Ticks που η διεργασία είναι RUNNABLE αλλά δεν τρέχει (για starvation)
 };
